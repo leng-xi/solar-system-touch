@@ -1,0 +1,1617 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>太阳系粒子系统</title>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script async src="https://cdn.jsdelivr.net/npm/es-module-shims@1.8.0/dist/es-module-shims.js"></script>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{overflow:hidden;background:#000;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+canvas{display:block;position:fixed;top:0;left:0;z-index:1}
+#videoInput{position:fixed;bottom:20px;left:20px;width:180px;height:135px;border-radius:16px;border:2px solid rgba(255,255,255,0.15);object-fit:cover;z-index:100;opacity:0;pointer-events:none;transition:opacity 0.3s}
+#videoInput.visible{opacity:0.85;pointer-events:auto}
+#videoInput.visible:hover{opacity:1;transform:scale(1.03)}
+.ui-panel{position:fixed;z-index:100;display:flex;align-items:center;gap:10px;padding:10px 18px;border-radius:40px;background:rgba(255,255,255,0.06);backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,0.1);color:rgba(255,255,255,0.85);font-size:13px;letter-spacing:0.5px;user-select:none;transition:all 0.3s}
+.ui-panel:hover{background:rgba(255,255,255,0.1);border-color:rgba(255,255,255,0.2)}
+#fullscreenBtn{bottom:20px;right:20px;cursor:pointer}
+#fullscreenBtn svg{width:18px;height:18px;fill:rgba(255,255,255,0.85)}
+#statusPanel{top:20px;right:20px;pointer-events:none}
+.status-dot{width:8px;height:8px;border-radius:50%;background:#f44;transition:background 0.3s;box-shadow:0 0 6px currentColor}
+.status-dot.active{background:#4f8;box-shadow:0 0 10px #4f8}
+#diffusionBar{width:60px;height:4px;border-radius:2px;background:rgba(255,255,255,0.1);overflow:hidden}
+#diffusionFill{height:100%;width:0%;border-radius:2px;background:linear-gradient(90deg,#4af,#f8a);transition:width 0.15s}
+#helpText{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:100;padding:8px 20px;border-radius:20px;background:rgba(255,255,255,0.05);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,0.08);color:rgba(255,255,255,0.45);font-size:12px;letter-spacing:0.5px;transition:opacity 1s;pointer-events:none}
+#loadingOverlay{position:fixed;inset:0;z-index:1000;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#000;color:rgba(255,255,255,0.6);font-size:14px;letter-spacing:1px;transition:opacity 0.8s}
+#loadingOverlay.hidden{opacity:0;pointer-events:none}
+.spinner{width:40px;height:40px;border:2px solid rgba(255,255,255,0.1);border-top-color:rgba(255,255,255,0.5);border-radius:50%;animation:spin 1s linear infinite;margin-bottom:20px}
+@keyframes spin{to{transform:rotate(360deg)}}
+#planetPanel .planet-arrow{cursor:pointer;padding:2px 6px;font-size:14px;opacity:0.5;transition:opacity 0.2s;text-align:center;line-height:1}
+#planetPanel .planet-arrow:hover{opacity:1.0}
+#planetPanel{border-left:3px solid rgba(255,255,255,0.3);transition:border-color 0.6s,background 0.3s}
+#backBtn:hover{opacity:1.0!important}
+</style>
+</head>
+<body>
+<div id="loadingOverlay"><div class="spinner"></div><div>初始化中</div></div>
+<script>
+// Fallback: hide loading overlay even if CDN fails
+setTimeout(function(){
+  var o=document.getElementById('loadingOverlay');
+  if(o&&o.style.display!=='none'){
+    o.style.opacity='0';
+    o.style.pointerEvents='none';
+    setTimeout(function(){o.style.display='none';},800);
+  }
+},3000);
+</script>
+<video id="videoInput" class="visible" playsinline autoplay muted></video>
+<div id="fullscreenBtn" class="ui-panel" title="全屏 (F)">
+  <svg viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+</div>
+<div id="statusPanel" class="ui-panel">
+  <div class="status-dot" id="statusDot"></div>
+  <span id="statusText">等待中</span>
+  <div id="diffusionBar"><div id="diffusionFill"></div></div>
+</div>
+<div id="planetPanel" class="ui-panel" style="left:20px;top:20px;flex-direction:column;align-items:flex-start;padding:14px 18px;gap:4px;border-radius:12px;">
+  <div id="backBtn" style="display:none;cursor:pointer;font-size:12px;opacity:0.6;margin-bottom:4px;transition:opacity 0.2s;">← 返回太阳系</div>
+  <div style="display:flex;align-items:center;gap:12px;">
+    <div id="planetUp" class="planet-arrow" style="font-size:14px;">▲</div>
+    <div id="planetName" style="font-size:16px;font-weight:600;letter-spacing:1.5px;">太阳系</div>
+    <div id="planetDown" class="planet-arrow" style="font-size:14px;">▼</div>
+  </div>
+  <div id="planetTagline" style="font-size:12px;opacity:0.6;letter-spacing:0.5px;padding-left:2px;">群星为伴，以光年丈量孤独</div>
+</div>
+<div id="helpText">点击轨道 · 进入行星</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+
+// ── Simplex noise (Ashima Arts) ──
+const NOISE_GLSL = `
+vec3 mod289(vec3 x){return x-floor(x*(1.0/289.0))*289.0;}
+vec4 mod289(vec4 x){return x-floor(x*(1.0/289.0))*289.0;}
+vec4 permute(vec4 x){return mod289(((x*34.0)+1.0)*x);}
+vec4 taylorInvSqrt(vec4 r){return 1.79284291400159-0.85373472095314*r;}
+float snoise(vec3 v){
+  const vec2 C=vec2(1.0/6.0,1.0/3.0);
+  const vec4 D=vec4(0.0,0.5,1.0,2.0);
+  vec3 i=floor(v+dot(v,C.yyy));
+  vec3 x0=v-i+dot(i,C.xxx);
+  vec3 g=step(x0.yzx,x0.xyz);
+  vec3 l=1.0-g;
+  vec3 i1=min(g.xyz,l.zxy);
+  vec3 i2=max(g.xyz,l.zxy);
+  vec3 x1=x0-i1+C.xxx;
+  vec3 x2=x0-i2+C.yyy;
+  vec3 x3=x0-D.yyy;
+  i=mod289(i);
+  vec4 p=permute(permute(permute(
+    i.z+vec4(0.0,i1.z,i2.z,1.0))
+    +i.y+vec4(0.0,i1.y,i2.y,1.0))
+    +i.x+vec4(0.0,i1.x,i2.x,1.0));
+  float n_=0.142857142857;
+  vec3 ns=n_*D.wyz-D.xzx;
+  vec4 j=p-49.0*floor(p*ns.z*ns.z);
+  vec4 x_=floor(j*ns.z);
+  vec4 y_=floor(j-7.0*x_);
+  vec4 x=x_*ns.x+ns.yyyy;
+  vec4 y=y_*ns.x+ns.yyyy;
+  vec4 h=1.0-abs(x)-abs(y);
+  vec4 b0=vec4(x.xy,y.xy);
+  vec4 b1=vec4(x.zw,y.zw);
+  vec4 s0=floor(b0)*2.0+1.0;
+  vec4 s1=floor(b1)*2.0+1.0;
+  vec4 sh=-step(h,vec4(0.0));
+  vec4 a0=b0.xzyw+s0.xzyw*sh.xxyy;
+  vec4 a1=b1.xzyw+s1.xzyw*sh.zzww;
+  vec3 p0=vec3(a0.xy,h.x);
+  vec3 p1=vec3(a0.zw,h.y);
+  vec3 p2=vec3(a1.xy,h.z);
+  vec3 p3=vec3(a1.zw,h.w);
+  vec4 norm=taylorInvSqrt(vec4(dot(p0,p0),dot(p1,p1),dot(p2,p2),dot(p3,p3)));
+  p0*=norm.x;p1*=norm.y;p2*=norm.z;p3*=norm.w;
+  vec4 m=max(0.6-vec4(dot(x0,x0),dot(x1,x1),dot(x2,x2),dot(x3,x3)),0.0);
+  m=m*m;
+  return 42.0*dot(m*m,vec4(dot(p0,x0),dot(p1,x1),dot(p2,x2),dot(p3,x3)));
+}
+float fbm(vec3 p){
+  float f=0.0;
+  f+=0.5000*snoise(p);p*=2.01;
+  f+=0.2500*snoise(p);p*=2.02;
+  f+=0.1250*snoise(p);p*=2.03;
+  f+=0.0625*snoise(p);
+  return f/0.9375;
+}
+`;
+
+// ── Kepler solver ──
+const KEPLER_GLSL = `
+float solveKepler(float M, float e){
+  float E=M;
+  for(int i=0;i<8;i++){
+    E=E-(E-e*sin(E)-M)/(1.0-e*cos(E));
+  }
+  return E;
+}
+`;
+
+// ── Renderer ──
+const renderer=new THREE.WebGLRenderer({antialias:true,alpha:false});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+renderer.setSize(window.innerWidth,window.innerHeight);
+renderer.toneMapping=THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure=1.3;
+renderer.outputColorSpace=THREE.SRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+
+const scene=new THREE.Scene();
+const camera=new THREE.PerspectiveCamera(60,window.innerWidth/window.innerHeight,0.1,100);
+camera.position.set(0,25.0*Math.sin(0.6),25.0*Math.cos(0.6));
+
+const clock=new THREE.Clock();
+
+// ── Common uniforms ──
+const uniforms={
+  uTime:{value:0},
+  uScale:{value:0.3},
+  uDiffusion:{value:0}
+};
+
+// ════════════════════════════════════════════════════════════
+//  PLANET CONFIGURATIONS
+// ════════════════════════════════════════════════════════════
+const planetConfigs = [
+  // 0 - 太阳 (Sun)
+  {
+    name: '太阳',
+    tagline: '你是我燃烧亿万年的孤勇',
+    accentColor: '#FFB347',
+    sphereCount: 15000,
+    sphereRadiusRange: [0.7, 1.2],
+    bands: 0,
+    oblateness: 1.0,
+    colorFunc: function(yNorm, rnd) {
+      return { hue: 0.08 + rnd * 0.04, sat: 0.8 + rnd * 0.15, lgt: 0.6 + rnd * 0.25 };
+    },
+    hasRings: false,
+    ringConfig: null,
+    atmoHue: 0.10,
+    atmoSat: 0.7,
+    atmoLgt: 0.6,
+    atmoRadiusRange: [1.2, 2.5],
+    emissive: true,
+    bloomStrength: 0.8,
+    bloomThreshold: 0.15
+  },
+  // 1 - 水星 (Mercury)
+  {
+    name: '水星',
+    tagline: '离光最近，却独自沉默',
+    accentColor: '#9E9E9E',
+    sphereCount: 12000,
+    sphereRadiusRange: [0.6, 0.9],
+    bands: 3,
+    oblateness: 1.0,
+    colorFunc: function(yNorm, rnd) {
+      return { hue: 0.0 + rnd * 0.02, sat: 0.0 + rnd * 0.05, lgt: 0.3 + rnd * 0.2 };
+    },
+    hasRings: false,
+    ringConfig: null,
+    atmoHue: 0.0,
+    atmoSat: 0.0,
+    atmoLgt: 0.35,
+    atmoRadiusRange: [1.1, 1.5],
+    emissive: false,
+    bloomStrength: 0.4,
+    bloomThreshold: 0.3
+  },
+  // 2 - 金星 (Venus)
+  {
+    name: '金星',
+    tagline: '藏在浓雾里的滚烫心事',
+    accentColor: '#E8C56D',
+    sphereCount: 14000,
+    sphereRadiusRange: [0.65, 1.0],
+    bands: 5,
+    oblateness: 1.0,
+    colorFunc: function(yNorm, rnd) {
+      return { hue: 0.10 + rnd * 0.02, sat: 0.3 + rnd * 0.2, lgt: 0.55 + rnd * 0.15 };
+    },
+    hasRings: false,
+    ringConfig: null,
+    atmoHue: 0.10,
+    atmoSat: 0.4,
+    atmoLgt: 0.55,
+    atmoRadiusRange: [1.2, 2.0],
+    emissive: false,
+    bloomStrength: 0.5,
+    bloomThreshold: 0.25
+  },
+  // 3 - 地球 (Earth)
+  {
+    name: '地球',
+    tagline: '万千星辰中唯一被泪水浸润',
+    accentColor: '#4A90D9',
+    sphereCount: 15000,
+    sphereRadiusRange: [0.65, 1.0],
+    bands: 4,
+    oblateness: 0.98,
+    colorFunc: function(yNorm, rnd) {
+      var absY = Math.abs(yNorm);
+      var hue, sat, lgt;
+      if (absY < 0.3) {
+        // equator: greenish
+        hue = 0.28 + rnd * 0.06;
+        sat = 0.5 + rnd * 0.3;
+        lgt = 0.35 + rnd * 0.2;
+      } else if (absY < 0.7) {
+        // mid latitudes: blue
+        hue = 0.58 + rnd * 0.06;
+        sat = 0.5 + rnd * 0.3;
+        lgt = 0.3 + rnd * 0.2;
+      } else {
+        // poles: white
+        hue = 0.55 + rnd * 0.08;
+        sat = 0.1 + rnd * 0.2;
+        lgt = 0.7 + rnd * 0.2;
+      }
+      return { hue: hue, sat: sat, lgt: lgt };
+    },
+    hasRings: false,
+    ringConfig: null,
+    atmoHue: 0.58,
+    atmoSat: 0.6,
+    atmoLgt: 0.5,
+    atmoRadiusRange: [1.05, 1.5],
+    emissive: false,
+    bloomStrength: 0.5,
+    bloomThreshold: 0.25,
+    moon: {
+      count: 1000,
+      radiusRange: [0.07, 0.13],
+      orbitRadius: 2.5,
+      orbitSpeed: 0.35,
+      orbitTilt: 0.15,
+      colorFunc: function(yNorm, rnd) {
+        return { hue: 0.58, sat: 0.06, lgt: 0.7 + rnd * 0.15 };
+      }
+    }
+  },
+  // 4 - 火星 (Mars)
+  {
+    name: '火星',
+    tagline: '一身锈色，仍在等谁到来',
+    accentColor: '#C1440E',
+    sphereCount: 12000,
+    sphereRadiusRange: [0.55, 0.85],
+    bands: 3,
+    oblateness: 1.0,
+    colorFunc: function(yNorm, rnd) {
+      return { hue: 0.03 + rnd * 0.03, sat: 0.6 + rnd * 0.2, lgt: 0.35 + rnd * 0.15 };
+    },
+    hasRings: false,
+    ringConfig: null,
+    atmoHue: 0.04,
+    atmoSat: 0.5,
+    atmoLgt: 0.4,
+    atmoRadiusRange: [1.1, 1.6],
+    emissive: false,
+    bloomStrength: 0.4,
+    bloomThreshold: 0.3
+  },
+  // 5 - 木星 (Jupiter)
+  {
+    name: '木星',
+    tagline: '所有风暴都不过是他的叹息',
+    accentColor: '#C88B3A',
+    sphereCount: 18000,
+    sphereRadiusRange: [0.7, 1.3],
+    bands: 12,
+    oblateness: 0.93,
+    colorFunc: function(yNorm, rnd) {
+      var bandPhase = Math.sin(yNorm * 12.0 + rnd * 0.3);
+      var mix = bandPhase * 0.5 + 0.5;
+      return { hue: 0.05 + mix * 0.03, sat: 0.5 + mix * 0.3, lgt: 0.4 + mix * 0.3 };
+    },
+    hasRings: false,
+    ringConfig: null,
+    atmoHue: 0.07,
+    atmoSat: 0.4,
+    atmoLgt: 0.5,
+    atmoRadiusRange: [1.2, 1.8],
+    emissive: false,
+    bloomStrength: 0.5,
+    bloomThreshold: 0.25
+  },
+  // 6 - 土星 (Saturn)
+  {
+    name: '土星',
+    tagline: '戴上光环，就再也摘不下来了',
+    accentColor: '#D4A857',
+    sphereCount: 15000,
+    sphereRadiusRange: [0.7, 1.2],
+    bands: 8,
+    oblateness: 0.9,
+    colorFunc: function(yNorm, rnd) {
+      var latBand = Math.sin(yNorm * 10.0 + rnd * 0.3);
+      var bandMix = latBand * 0.5 + 0.5;
+      return { hue: 0.08 + bandMix * 0.03, sat: 0.35 + bandMix * 0.35, lgt: 0.6 + bandMix * 0.2 };
+    },
+    hasRings: true,
+    ringConfig: {
+      bands: [
+        { rMin: 1.30, rMax: 1.50, hue: 0.08, sat: 0.10, lgtMin: 0.40, lgtMax: 0.55, weight: 0.05 },
+        { rMin: 1.50, rMax: 1.80, hue: 0.08, sat: 0.10, lgtMin: 0.60, lgtMax: 0.75, weight: 0.15 },
+        { rMin: 1.85, rMax: 2.30, hue: 0.10, sat: 0.18, lgtMin: 0.75, lgtMax: 0.92, weight: 0.38 },
+        { rMin: 2.40, rMax: 2.80, hue: 0.10, sat: 0.15, lgtMin: 0.70, lgtMax: 0.88, weight: 0.25 },
+        { rMin: 2.85, rMax: 3.30, hue: 0.07, sat: 0.15, lgtMin: 0.55, lgtMax: 0.72, weight: 0.17 }
+      ],
+      enckeGap: 3.10,
+      enckeWidth: 0.04,
+      count: 20000,
+      tilt: 0.0
+    },
+    atmoHue: 0.60,
+    atmoSat: 0.6,
+    atmoLgt: 0.5,
+    atmoRadiusRange: [1.2, 2.7],
+    emissive: false,
+    bloomStrength: 0.6,
+    bloomThreshold: 0.25
+  },
+  // 7 - 天王星 (Uranus)
+  {
+    name: '天王星',
+    tagline: '侧身而过，是宇宙最温柔的叛逆',
+    accentColor: '#72C2C0',
+    sphereCount: 14000,
+    sphereRadiusRange: [0.65, 1.05],
+    bands: 5,
+    oblateness: 0.98,
+    colorFunc: function(yNorm, rnd) {
+      return { hue: 0.48 + rnd * 0.04, sat: 0.4 + rnd * 0.2, lgt: 0.5 + rnd * 0.15 };
+    },
+    hasRings: true,
+    ringConfig: {
+      bands: [
+        { rMin: 1.50, rMax: 1.80, hue: 0.0, sat: 0.0, lgtMin: 0.15, lgtMax: 0.25, weight: 1.0 }
+      ],
+      enckeGap: 0,
+      enckeWidth: 0,
+      count: 8000,
+      tilt: 0.1
+    },
+    atmoHue: 0.50,
+    atmoSat: 0.5,
+    atmoLgt: 0.55,
+    atmoRadiusRange: [1.1, 1.6],
+    emissive: false,
+    bloomStrength: 0.5,
+    bloomThreshold: 0.25
+  },
+  // 8 - 海王星 (Neptune)
+  {
+    name: '海王星',
+    tagline: '在最远处，替你呼啸了一生',
+    accentColor: '#3B5CAB',
+    sphereCount: 14000,
+    sphereRadiusRange: [0.65, 1.05],
+    bands: 5,
+    oblateness: 0.98,
+    colorFunc: function(yNorm, rnd) {
+      return { hue: 0.58 + rnd * 0.07, sat: 0.6 + rnd * 0.2, lgt: 0.3 + rnd * 0.2 };
+    },
+    hasRings: false,
+    ringConfig: null,
+    atmoHue: 0.60,
+    atmoSat: 0.7,
+    atmoLgt: 0.45,
+    atmoRadiusRange: [1.1, 1.8],
+    emissive: false,
+    bloomStrength: 0.5,
+    bloomThreshold: 0.25
+  }
+];
+
+const ORBIT_DATA = [
+  { radius: 3.0,  speed: 4.15,  tilt: 0.05 },  // 水星
+  { radius: 4.2,  speed: 1.62,  tilt: 0.03 },  // 金星
+  { radius: 5.5,  speed: 1.0,   tilt: 0.02 },  // 地球
+  { radius: 7.0,  speed: 0.53,  tilt: 0.04 },  // 火星
+  { radius: 10.0, speed: 0.084, tilt: 0.02 },  // 木星
+  { radius: 13.0, speed: 0.034, tilt: 0.05 },  // 土星
+  { radius: 17.0, speed: 0.012, tilt: 0.03 },  // 天王星
+  { radius: 20.0, speed: 0.006, tilt: 0.03 },  // 海王星
+];
+
+// ════════════════════════════════════════════════════════════
+//  GENERATOR: Sphere Body
+// ════════════════════════════════════════════════════════════
+function createSphereBody(config) {
+  var count = config.sphereCount;
+  var geo = new THREE.BufferGeometry();
+  var pos = new Float32Array(count * 3);
+  var col = new Float32Array(count * 3);
+  var nrm = new Float32Array(count * 3);
+  var rad = new Float32Array(count);
+  var noise = new Float32Array(count * 3);
+  var random = new Float32Array(count);
+
+  var rMin = config.sphereRadiusRange[0];
+  var rMax = config.sphereRadiusRange[1];
+  var obl = config.oblateness;
+  var bands = config.bands;
+
+  for (var i = 0; i < count; i++) {
+    var phi = Math.acos(1 - 2 * (i + 0.5) / count);
+    var theta = Math.PI * (1 + Math.sqrt(5)) * i;
+    var r = rMin + Math.random() * (rMax - rMin);
+    var yNorm = Math.cos(phi);
+
+    // Apply banding: if bands > 0, quantize latitude for visual banding
+    var displayYNorm = yNorm;
+    if (bands > 0) {
+      var bandIndex = Math.floor((yNorm + 1) * 0.5 * bands);
+      displayYNorm = (bandIndex / bands) * 2 - 1 + (1 / bands);
+    }
+
+    var px = r * Math.sin(phi) * Math.cos(theta);
+    var py = r * yNorm * obl;
+    var pz = r * Math.sin(phi) * Math.sin(theta);
+
+    pos[i * 3] = px;
+    pos[i * 3 + 1] = py;
+    pos[i * 3 + 2] = pz;
+
+    // Normals (direction from center)
+    var len = Math.sqrt(px * px + py * py + pz * pz);
+    if (len > 0) {
+      nrm[i * 3] = px / len;
+      nrm[i * 3 + 1] = py / len;
+      nrm[i * 3 + 2] = pz / len;
+    }
+
+    var rnd = Math.random();
+    var cResult = config.colorFunc(displayYNorm, rnd);
+    var c = new THREE.Color().setHSL(cResult.hue, cResult.sat, cResult.lgt);
+    col[i * 3] = c.r;
+    col[i * 3 + 1] = c.g;
+    col[i * 3 + 2] = c.b;
+
+    noise[i * 3] = Math.random() * 10;
+    noise[i * 3 + 1] = Math.random() * 10;
+    noise[i * 3 + 2] = Math.random() * 10;
+    rad[i] = 0.05 + Math.random() * 0.05;
+    random[i] = Math.random();
+  }
+
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('aColor', new THREE.BufferAttribute(col, 3));
+  geo.setAttribute('aNormal', new THREE.BufferAttribute(nrm, 3));
+  geo.setAttribute('aNoise', new THREE.BufferAttribute(noise, 3));
+  geo.setAttribute('aRadius', new THREE.BufferAttribute(rad, 1));
+  geo.setAttribute('aRandom', new THREE.BufferAttribute(random, 1));
+
+  var isEmissive = config.emissive ? 1.0 : 0.0;
+
+  var sphereVert = `
+uniform float uTime;
+uniform float uScale;
+uniform float uDiffusion;
+attribute vec3 aColor;
+attribute vec3 aNormal;
+attribute vec3 aNoise;
+attribute float aRadius;
+attribute float aRandom;
+varying vec3 vColor;
+varying float vGlow;
+
+${NOISE_GLSL}
+
+void main(){
+  vec3 pos=position;
+  float t=uTime*0.25;
+
+  // Gentle breathing
+  float breathe=sin(t*0.4+aRandom*6.2832)*0.01;
+  pos*=1.0+breathe;
+
+  // Chaos from diffusion
+  float chaos=smoothstep(0.7,1.0,uDiffusion)*0.5;
+  vec3 n1=vec3(
+    fbm(pos*2.0+vec3(t*0.4,0.0,0.0)),
+    fbm(pos*2.0+vec3(0.0,t*0.45,0.0)),
+    fbm(pos*2.0+vec3(0.0,0.0,t*0.35))
+  );
+  pos+=n1*0.08*chaos;
+
+  // Burst effect
+  float burstStrength=smoothstep(2.5,4.0,uScale);
+  vec3 dir=normalize(position);
+  pos+=dir*burstStrength*1.5*aRandom;
+
+  // Emissive pulsing (Sun)
+  float emissivePulse = 1.0;
+  if (${isEmissive.toFixed(1)} > 0.5) {
+    emissivePulse = 1.0 + 0.15 * sin(t * 2.0 + aRandom * 6.2832);
+    pos *= emissivePulse;
+  }
+
+  vec4 mvPos=modelViewMatrix*vec4(pos*uScale,1.0);
+  gl_Position=projectionMatrix*mvPos;
+
+  // Directional lighting
+  vec3 lightDir = normalize(vec3(0.5, 0.8, 0.6));
+  float diffuse = max(dot(aNormal, lightDir), 0.0);
+  float ambient = 0.35;
+  float brightness = ambient + diffuse * 0.65;
+
+  // Emissive override
+  if (${isEmissive.toFixed(1)} > 0.5) {
+    brightness = 0.85 + 0.15 * sin(t * 1.5 + aRandom * 6.2832);
+  }
+
+  gl_PointSize=max(1.0,(8.0*aRadius+5.0)*uScale*(-3.0/mvPos.z));
+
+  vColor=aColor*brightness;
+  if (${isEmissive.toFixed(1)} > 0.5) {
+    vGlow=mix(0.7,1.0,uDiffusion);
+  } else {
+    vGlow=mix(0.5,0.9,uDiffusion);
+  }
+}`;
+
+  var sphereFrag = `
+varying vec3 vColor;
+varying float vGlow;
+void main(){
+  vec2 uv=gl_PointCoord-0.5;
+  float d=dot(uv,uv);
+  float core=exp(-12.0*d);
+  float glow=exp(-4.0*d)*0.35;
+  float alpha=(core+glow)*vGlow*0.75;
+  gl_FragColor=vec4(vColor*(core+glow*0.5),alpha);
+}`;
+
+  var mat = new THREE.ShaderMaterial({
+    vertexShader: sphereVert,
+    fragmentShader: sphereFrag,
+    uniforms: uniforms,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending
+  });
+
+  return new THREE.Points(geo, mat);
+}
+
+// ════════════════════════════════════════════════════════════
+//  GENERATOR: Ring System
+// ════════════════════════════════════════════════════════════
+function createRingSystem(config) {
+  if (!config.hasRings || !config.ringConfig) return null;
+
+  var rc = config.ringConfig;
+  var count = rc.count;
+  var bands = rc.bands;
+
+  var geo = new THREE.BufferGeometry();
+  var pos = new Float32Array(count * 3);
+  var col = new Float32Array(count * 3);
+  var aA = new Float32Array(count);
+  var aE = new Float32Array(count);
+  var aM0 = new Float32Array(count);
+  var aTheta = new Float32Array(count);
+  var aSpeed = new Float32Array(count);
+  var aRandom = new Float32Array(count);
+
+  function pickBand() {
+    var r = Math.random();
+    var cum = 0;
+    for (var b = 0; b < bands.length; b++) {
+      cum += bands[b].weight;
+      if (r < cum) return b;
+    }
+    return bands.length - 1;
+  }
+
+  for (var i = 0; i < count; i++) {
+    pos[i * 3] = (Math.random() - 0.5) * 0.01;
+    pos[i * 3 + 1] = (Math.random() - 0.5) * 0.01;
+    pos[i * 3 + 2] = (Math.random() - 0.5) * 0.01;
+
+    var bi = pickBand();
+    var band = bands[bi];
+    var a = band.rMin + Math.random() * (band.rMax - band.rMin);
+
+    // Encke gap (Saturn)
+    if (rc.enckeGap > 0 && a > rc.enckeGap - rc.enckeWidth && a < rc.enckeGap + rc.enckeWidth) {
+      a += rc.enckeWidth * 2;
+    }
+
+    aA[i] = a;
+
+    var hue = band.hue + (Math.random() - 0.5) * 0.03;
+    var sat = band.sat + (Math.random() - 0.5) * 0.05;
+    var lgt = band.lgtMin + Math.random() * (band.lgtMax - band.lgtMin);
+    var c = new THREE.Color().setHSL(hue, sat, lgt);
+    col[i * 3] = c.r;
+    col[i * 3 + 1] = c.g;
+    col[i * 3 + 2] = c.b;
+
+    aE[i] = 0.01 + Math.random() * 0.05;
+    aM0[i] = Math.random() * Math.PI * 2;
+    aTheta[i] = (Math.random() - 0.5) * 0.02 + rc.tilt;
+    aSpeed[i] = 0.4 + Math.random() * 0.4;
+    aRandom[i] = Math.random();
+  }
+
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('aColor', new THREE.BufferAttribute(col, 3));
+  geo.setAttribute('aA', new THREE.BufferAttribute(aA, 1));
+  geo.setAttribute('aE', new THREE.BufferAttribute(aE, 1));
+  geo.setAttribute('aM0', new THREE.BufferAttribute(aM0, 1));
+  geo.setAttribute('aTheta', new THREE.BufferAttribute(aTheta, 1));
+  geo.setAttribute('aSpeed', new THREE.BufferAttribute(aSpeed, 1));
+  geo.setAttribute('aRandom', new THREE.BufferAttribute(aRandom, 1));
+
+  var ringVert = `
+uniform float uTime;
+uniform float uScale;
+uniform float uDiffusion;
+attribute vec3 aColor;
+attribute float aA;
+attribute float aE;
+attribute float aM0;
+attribute float aTheta;
+attribute float aSpeed;
+attribute float aRandom;
+varying vec3 vColor;
+varying float vGlow;
+
+${NOISE_GLSL}
+${KEPLER_GLSL}
+
+void main(){
+  float n=aSpeed*0.5;
+  float M=aM0+uTime*n;
+  float E=solveKepler(M,aE);
+  float cosE=cos(E);
+  float sinE=sin(E);
+  float r=aA*(1.0-aE*cosE);
+  float x_orb=r*cosE;
+  float z_orb=r*sinE*sqrt(1.0-aE*aE);
+
+  vec3 orbPos=vec3(x_orb,0.0,z_orb);
+  float ct=cos(aTheta);
+  float st=sin(aTheta);
+  orbPos=vec3(orbPos.x,orbPos.y*ct-orbPos.z*st,orbPos.y*st+orbPos.z*ct);
+
+  vec3 pos=orbPos;
+
+  float chaos=smoothstep(0.7,1.0,uDiffusion)*0.4;
+  vec3 n1=vec3(
+    fbm(pos*2.5+vec3(uTime*0.4,0.0,0.0)),
+    fbm(pos*2.5+vec3(0.0,uTime*0.45,0.0)),
+    fbm(pos*2.5+vec3(0.0,0.0,uTime*0.35))
+  );
+  pos+=n1*0.12*chaos;
+
+  float burst=smoothstep(2.5,4.0,uScale);
+  vec3 dir=normalize(orbPos+vec3(0.001));
+  pos+=dir*burst*1.8*aRandom;
+
+  vec4 mvPos=modelViewMatrix*vec4(pos*uScale,1.0);
+  gl_Position=projectionMatrix*mvPos;
+
+  float brightness=0.65;
+  gl_PointSize=max(1.0,(5.0+3.0*aRandom)*uScale*(-3.0/mvPos.z));
+
+  vColor=aColor*brightness;
+  vGlow=mix(0.5,0.9,uDiffusion);
+}`;
+
+  var ringFrag = `
+varying vec3 vColor;
+varying float vGlow;
+void main(){
+  vec2 uv=gl_PointCoord-0.5;
+  float d=dot(uv,uv);
+  float core=exp(-14.0*d);
+  float glow=exp(-4.0*d)*0.3;
+  float alpha=(core+glow)*vGlow*0.7;
+  gl_FragColor=vec4(vColor*(core+glow*0.45),alpha);
+}`;
+
+  var mat = new THREE.ShaderMaterial({
+    vertexShader: ringVert,
+    fragmentShader: ringFrag,
+    uniforms: uniforms,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending
+  });
+
+  return new THREE.Points(geo, mat);
+}
+
+// ════════════════════════════════════════════════════════════
+//  GENERATOR: Atmosphere
+// ════════════════════════════════════════════════════════════
+function createAtmosphere(config) {
+  var count = 5000;
+  var geo = new THREE.BufferGeometry();
+  var pos = new Float32Array(count * 3);
+  var col = new Float32Array(count * 3);
+  var noise = new Float32Array(count * 3);
+  var rad = new Float32Array(count);
+
+  var rMin = config.atmoRadiusRange[0];
+  var rMax = config.atmoRadiusRange[1];
+
+  for (var i = 0; i < count; i++) {
+    var atmoTheta = Math.random() * Math.PI * 2;
+    var phi;
+    if (Math.random() < 0.6) {
+      phi = Math.random() < 0.5 ? Math.random() * 0.5 : Math.PI - Math.random() * 0.5;
+    } else {
+      phi = Math.acos(2 * Math.random() - 1);
+    }
+    var r = rMin + Math.random() * (rMax - rMin);
+    pos[i * 3] = r * Math.sin(phi) * Math.cos(atmoTheta);
+    pos[i * 3 + 1] = r * Math.cos(phi) * config.oblateness;
+    pos[i * 3 + 2] = r * Math.sin(phi) * Math.sin(atmoTheta);
+
+    var hue = config.atmoHue + (Math.random() - 0.5) * 0.1;
+    var sat = config.atmoSat + (Math.random() - 0.5) * 0.2;
+    var lgt = config.atmoLgt + (Math.random() - 0.5) * 0.2;
+    var c = new THREE.Color().setHSL(hue, sat, lgt);
+    col[i * 3] = c.r;
+    col[i * 3 + 1] = c.g;
+    col[i * 3 + 2] = c.b;
+
+    noise[i * 3] = Math.random() * 10;
+    noise[i * 3 + 1] = Math.random() * 10;
+    noise[i * 3 + 2] = Math.random() * 10;
+    rad[i] = 0.4 + Math.random() * 0.4;
+  }
+
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('aColor', new THREE.BufferAttribute(col, 3));
+  geo.setAttribute('aNoise', new THREE.BufferAttribute(noise, 3));
+  geo.setAttribute('aRadius', new THREE.BufferAttribute(rad, 1));
+
+  var atmoVert = `
+uniform float uTime;
+uniform float uScale;
+uniform float uDiffusion;
+attribute vec3 aColor;
+attribute vec3 aNoise;
+attribute float aRadius;
+varying vec3 vColor;
+varying float vGlow;
+
+${NOISE_GLSL}
+
+void main(){
+  vec3 pos=position;
+  float t=uTime*0.2;
+
+  pos.x+=sin(t*0.5+aNoise.x)*0.15;
+  pos.y+=cos(t*0.4+aNoise.y)*0.15;
+  pos.z+=sin(t*0.6+aNoise.z)*0.12;
+
+  float chaos=smoothstep(0.7,1.0,uDiffusion)*0.4;
+  vec3 n1=vec3(
+    fbm(pos*2.0+vec3(t*0.4,0.0,0.0)),
+    fbm(pos*2.0+vec3(0.0,t*0.45,0.0)),
+    fbm(pos*2.0+vec3(0.0,0.0,t*0.35))
+  );
+  pos+=n1*0.10*chaos;
+
+  vec4 mvPos=modelViewMatrix*vec4(pos*uScale,1.0);
+  gl_Position=projectionMatrix*mvPos;
+
+  float brightness=0.5;
+  gl_PointSize=max(1.0,(6.0*aRadius+3.0)*uScale*(-3.0/mvPos.z));
+
+  vColor=aColor*brightness;
+  vGlow=mix(0.3,0.7,uDiffusion);
+}`;
+
+  var atmoFrag = `
+varying vec3 vColor;
+varying float vGlow;
+void main(){
+  vec2 uv=gl_PointCoord-0.5;
+  float d=dot(uv,uv);
+  float core=exp(-10.0*d);
+  float glow=exp(-3.0*d)*0.3;
+  float alpha=(core+glow)*vGlow*0.65;
+  gl_FragColor=vec4(vColor*(core+glow*0.5),alpha);
+}`;
+
+  var mat = new THREE.ShaderMaterial({
+    vertexShader: atmoVert,
+    fragmentShader: atmoFrag,
+    uniforms: uniforms,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending
+  });
+
+  return new THREE.Points(geo, mat);
+}
+
+// ════════════════════════════════════════════════════════════
+//  BUILD A PLANET GROUP
+// ════════════════════════════════════════════════════════════
+function buildPlanetGroup(config) {
+  var group = new THREE.Group();
+  var body = createSphereBody(config);
+  group.add(body);
+
+  var rings = createRingSystem(config);
+  if (rings) {
+    group.add(rings);
+  }
+
+  var atmo = createAtmosphere(config);
+  group.add(atmo);
+
+  // Moon
+  if (config.moon) {
+    var m = config.moon;
+    var mGeo = new THREE.BufferGeometry();
+    var mPos = new Float32Array(m.count * 3);
+    var mCol = new Float32Array(m.count * 3);
+    var mSizes = new Float32Array(m.count);
+    var rMin = m.radiusRange[0], rMax = m.radiusRange[1];
+    for (var i = 0; i < m.count; i++) {
+      var phi = Math.acos(1 - 2 * (i + 0.5) / m.count);
+      var theta = Math.PI * (1 + Math.sqrt(5)) * i;
+      var r = rMin + Math.random() * (rMax - rMin);
+      mPos[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+      mPos[i * 3 + 1] = r * Math.cos(phi);
+      mPos[i * 3 + 2] = r * Math.sin(phi) * Math.sin(theta);
+      var c = m.colorFunc(Math.cos(phi), Math.random());
+      var color = new THREE.Color().setHSL(c.hue, c.sat, c.lgt);
+      mCol[i * 3] = color.r;
+      mCol[i * 3 + 1] = color.g;
+      mCol[i * 3 + 2] = color.b;
+      mSizes[i] = 0.8 + Math.random() * 1.2;
+    }
+    mGeo.setAttribute('position', new THREE.BufferAttribute(mPos, 3));
+    mGeo.setAttribute('color', new THREE.BufferAttribute(mCol, 3));
+    mGeo.setAttribute('size', new THREE.BufferAttribute(mSizes, 1));
+
+    var moonMat = new THREE.ShaderMaterial({
+      vertexShader: `
+        attribute float size;
+        varying vec3 vColor;
+        void main(){
+          vColor=color;
+          vec4 mv=modelViewMatrix*vec4(position,1.0);
+          gl_PointSize=max(1.0,size*(-3.0/mv.z));
+          gl_Position=projectionMatrix*mv;
+        }
+      `,
+      fragmentShader: `
+        varying vec3 vColor;
+        void main(){
+          vec2 uv=gl_PointCoord-0.5;
+          float d=dot(uv,uv);
+          float core=exp(-12.0*d);
+          float glow=exp(-4.0*d)*0.25;
+          float alpha=(core+glow)*0.8;
+          gl_FragColor=vec4(vColor*(core+glow*0.4),alpha);
+        }
+      `,
+      transparent: true,
+      depthWrite: false,
+      vertexColors: true,
+      blending: THREE.AdditiveBlending
+    });
+
+    var moonPoints = new THREE.Points(mGeo, moonMat);
+    var moonPivot = new THREE.Group();
+    moonPoints.position.x = m.orbitRadius;
+    moonPivot.add(moonPoints);
+    moonPivot.rotation.x = m.orbitTilt;
+    group.add(moonPivot);
+
+    // Store reference for animation
+    group.userData.moonPivot = moonPivot;
+    group.userData.moonSpeed = m.orbitSpeed;
+  }
+
+  return group;
+}
+
+// ════════════════════════════════════════════════════════════
+//  PLANET SWITCHING STATE
+// ════════════════════════════════════════════════════════════
+var currentPlanetIndex = 6; // Saturn default
+var viewMode = 'overview'; // 'overview' or 'focused'
+var overviewGroup = null;
+var orbitHitboxes = []; // clickable orbit hitboxes
+var isSwitching = false;
+var switchDirection = 0;
+var currentGroup = null;
+var incomingGroup = null;
+var switchProgress = 0;
+var switchTargetY = 5;
+
+var planetNameEl = document.getElementById('planetName');
+var planetTaglineEl = document.getElementById('planetTagline');
+var planetUpEl = document.getElementById('planetUp');
+var planetDownEl = document.getElementById('planetDown');
+var backBtnEl = document.getElementById('backBtn');
+
+// Palm vertical gesture for planet switching
+var lastPalmY = 0.5;        // last known palm Y before hand lost
+var palmSwitchCooldown = 0; // cooldown timer
+var wasHandDetected = false; // previous frame hand state
+
+function applyBloomSettings(config) {
+  bloom.strength = config.bloomStrength;
+  bloom.threshold = config.bloomThreshold;
+}
+
+function updatePlanetUI(config) {
+  planetNameEl.textContent = config.name;
+  planetTaglineEl.textContent = config.tagline;
+  var panel = document.getElementById('planetPanel');
+  panel.style.borderLeftColor = config.accentColor;
+  planetTaglineEl.style.color = config.accentColor;
+}
+
+function buildOverview() {
+  var group = new THREE.Group();
+
+  // Per-planet overview overrides: {bright, radiusMul, showRings}
+  var overrides = {
+    1: {bright: 0.45, radiusMul: 0.4},   // 水星 - dimmer
+    2: {bright: 0.55, radiusMul: 0.4},   // 金星 - dimmer
+    3: {bright: 0.5,  radiusMul: 0.4},   // 地球
+    4: {bright: 1.0,  radiusMul: 0.4},   // 火星
+    5: {bright: 1.0,  radiusMul: 0.55},  // 木星 - brighter, bigger
+    6: {bright: 0.7,  radiusMul: 0.4, showRings: true},  // 土星
+    7: {bright: 1.0,  radiusMul: 0.4, showRings: true},  // 天王星
+    8: {bright: 0.7,  radiusMul: 0.4}    // 海王星
+  };
+
+  // Sun at center
+  var sunConfig = planetConfigs[0];
+  var sunGroup = buildPlanetGroup(sunConfig);
+  group.add(sunGroup);
+
+  // 8 planets (indices 1-8) orbiting
+  for (var i = 1; i <= 8; i++) {
+    var config = planetConfigs[i];
+    var orbit = ORBIT_DATA[i - 1];
+    var ov = overrides[i] || {bright: 1.0, radiusMul: 0.4};
+
+    // Lightweight planet: small sphere body only
+    var pGeo = new THREE.BufferGeometry();
+    var pCount = Math.floor(config.sphereCount / 5);
+    var pPos = new Float32Array(pCount * 3);
+    var pCol = new Float32Array(pCount * 3);
+    var pSizes = new Float32Array(pCount);
+    var rMin = config.sphereRadiusRange[0] * ov.radiusMul;
+    var rMax = config.sphereRadiusRange[1] * ov.radiusMul;
+
+    for (var j = 0; j < pCount; j++) {
+      var phi = Math.acos(1 - 2 * (j + 0.5) / pCount);
+      var theta = Math.PI * (1 + Math.sqrt(5)) * j;
+      var r = rMin + Math.random() * (rMax - rMin);
+      var yNorm = Math.cos(phi);
+      var displayYNorm = yNorm;
+      if (config.bands > 0) {
+        var bandIndex = Math.floor((yNorm + 1) * 0.5 * config.bands);
+        displayYNorm = (bandIndex / config.bands) * 2 - 1 + (1 / config.bands);
+      }
+      var px = r * Math.sin(phi) * Math.cos(theta);
+      var py = r * yNorm * config.oblateness;
+      var pz = r * Math.sin(phi) * Math.sin(theta);
+      pPos[j * 3] = px;
+      pPos[j * 3 + 1] = py;
+      pPos[j * 3 + 2] = pz;
+      var cResult = config.colorFunc(displayYNorm, Math.random());
+      var lgt = cResult.lgt * ov.bright;
+      var c = new THREE.Color().setHSL(cResult.hue, cResult.sat, lgt);
+      pCol[j * 3] = c.r;
+      pCol[j * 3 + 1] = c.g;
+      pCol[j * 3 + 2] = c.b;
+      pSizes[j] = 1.0 + Math.random() * 2.0;
+    }
+    pGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
+    pGeo.setAttribute('color', new THREE.BufferAttribute(pCol, 3));
+    pGeo.setAttribute('size', new THREE.BufferAttribute(pSizes, 1));
+
+    var pMat = new THREE.ShaderMaterial({
+      vertexShader: `
+        attribute float size;
+        varying vec3 vColor;
+        void main(){
+          vColor=color;
+          vec4 mv=modelViewMatrix*vec4(position,1.0);
+          gl_PointSize=max(1.0,size*(-3.0/mv.z));
+          gl_Position=projectionMatrix*mv;
+        }
+      `,
+      fragmentShader: `
+        varying vec3 vColor;
+        void main(){
+          vec2 uv=gl_PointCoord-0.5;
+          float d=dot(uv,uv);
+          float core=exp(-8.0*d);
+          float glow=exp(-3.0*d)*0.3;
+          float alpha=(core+glow)*0.7;
+          gl_FragColor=vec4(vColor*(core+glow*0.4),alpha);
+        }
+      `,
+      transparent: true,
+      depthWrite: false,
+      vertexColors: true,
+      blending: THREE.AdditiveBlending
+    });
+
+    var points = new THREE.Points(pGeo, pMat);
+    var pivot = new THREE.Group();
+    points.position.x = orbit.radius;
+    pivot.add(points);
+
+    // Overview rings for Saturn and Uranus
+    if(ov.showRings && config.hasRings && config.ringConfig){
+      var rc = config.ringConfig;
+      var ringCount = Math.floor(rc.count / 6);
+      var rGeo = new THREE.BufferGeometry();
+      var rPos = new Float32Array(ringCount * 3);
+      var rCol = new Float32Array(ringCount * 3);
+      var rSizes = new Float32Array(ringCount);
+      var band = rc.bands[Math.floor(rc.bands.length / 2)];
+      for(var k=0;k<ringCount;k++){
+        var rr = band.rMin + Math.random() * (band.rMax - band.rMin);
+        var ra = Math.random() * Math.PI * 2;
+        rPos[k*3] = Math.cos(ra) * rr * 0.4;
+        rPos[k*3+1] = (Math.random()-0.5) * 0.02;
+        rPos[k*3+2] = Math.sin(ra) * rr * 0.4;
+        var rl = band.lgtMin + Math.random() * (band.lgtMax - band.lgtMin);
+        var rc2 = new THREE.Color().setHSL(band.hue, band.sat, rl * 0.7);
+        rCol[k*3] = rc2.r;
+        rCol[k*3+1] = rc2.g;
+        rCol[k*3+2] = rc2.b;
+        rSizes[k] = 0.5 + Math.random() * 1.0;
+      }
+      rGeo.setAttribute('position', new THREE.BufferAttribute(rPos, 3));
+      rGeo.setAttribute('color', new THREE.BufferAttribute(rCol, 3));
+      rGeo.setAttribute('size', new THREE.BufferAttribute(rSizes, 1));
+      var rMat = new THREE.ShaderMaterial({
+        vertexShader: `
+          attribute float size;
+          varying vec3 vColor;
+          void main(){
+            vColor=color;
+            vec4 mv=modelViewMatrix*vec4(position,1.0);
+            gl_PointSize=max(1.0,size*(-3.0/mv.z));
+            gl_Position=projectionMatrix*mv;
+          }
+        `,
+        fragmentShader: `
+          varying vec3 vColor;
+          void main(){
+            vec2 uv=gl_PointCoord-0.5;
+            float d=dot(uv,uv);
+            float core=exp(-10.0*d);
+            float alpha=core*0.5;
+            gl_FragColor=vec4(vColor*core,alpha);
+          }
+        `,
+        transparent: true,
+        depthWrite: false,
+        vertexColors: true,
+        blending: THREE.AdditiveBlending
+      });
+      var ringPoints = new THREE.Points(rGeo, rMat);
+      ringPoints.rotation.x = rc.tilt || 0;
+      pivot.add(ringPoints);
+    }
+
+    pivot.rotation.x = orbit.tilt;
+    pivot.rotation.y = Math.random() * Math.PI * 2;
+    group.add(pivot);
+
+    // Store orbit data on pivot for animation
+    pivot.userData.orbitSpeed = orbit.speed;
+    pivot.userData.isOrbitPivot = true;
+
+    // Orbit dashed line
+    var segs = 128;
+    var linePos = new Float32Array(segs * 3);
+    for(var k=0;k<segs;k++){
+      var a=k/segs*Math.PI*2;
+      linePos[k*3]=Math.cos(a)*orbit.radius;
+      linePos[k*3+1]=0;
+      linePos[k*3+2]=Math.sin(a)*orbit.radius;
+    }
+    var lineGeo=new THREE.BufferGeometry();
+    lineGeo.setAttribute('position',new THREE.BufferAttribute(linePos,3));
+    var lineMat=new THREE.LineDashedMaterial({
+      color: new THREE.Color(config.accentColor),
+      dashSize: 0.3,
+      gapSize: 0.2,
+      transparent: true,
+      opacity: 0.35,
+      depthWrite: false
+    });
+    var line=new THREE.Line(lineGeo,lineMat);
+    line.computeLineDistances();
+    line.rotation.x=orbit.tilt;
+    group.add(line);
+
+    // Invisible hitbox torus for click detection
+    var hitGeo=new THREE.TorusGeometry(orbit.radius,0.25,4,segs);
+    var hitMat=new THREE.MeshBasicMaterial({visible:false,transparent:true,opacity:0});
+    var hitbox=new THREE.Mesh(hitGeo,hitMat);
+    hitbox.rotation.x=Math.PI/2+orbit.tilt;
+    hitbox.userData.planetIndex=i;
+    group.add(hitbox);
+    orbitHitboxes.push(hitbox);
+  }
+
+  return group;
+}
+
+function focusOnPlanet(index) {
+  viewMode = 'focused';
+
+  // Remove overview immediately
+  if(overviewGroup){
+    scene.remove(overviewGroup);
+    overviewGroup.traverse(function(child){
+      if(child.geometry) child.geometry.dispose();
+      if(child.material) child.material.dispose();
+    });
+    overviewGroup = null;
+  }
+  orbitHitboxes = [];
+
+  // Build detailed planet
+  initPlanet(index);
+  currentPlanetIndex = index;
+
+  // Transition camera
+  targetDistance = CAM_DISTANCES[1];
+  camState = 1;
+
+  // Update help text
+  helpText.textContent = '半握/全开 = 中/近 · 移动手掌 = 旋转视角 · 空格 = 摄像头';
+  helpText.style.opacity = '0.45';
+
+  // Show back button
+  backBtnEl.style.display = 'block';
+}
+
+function returnToOverview() {
+  viewMode = 'overview';
+
+  // Remove current planet
+  if(currentGroup){
+    scene.remove(currentGroup);
+    currentGroup.traverse(function(child){
+      if(child.geometry) child.geometry.dispose();
+      if(child.material) child.material.dispose();
+    });
+    currentGroup = null;
+  }
+
+  // Build overview
+  overviewGroup = buildOverview();
+  scene.add(overviewGroup);
+
+  // Reset camera
+  targetDistance = CAM_DISTANCES[0];
+  camState = 0;
+  targetScale = 1.0;
+  targetDiffusion = 0;
+
+  // Reset UI
+  planetNameEl.textContent = '太阳系';
+  planetTaglineEl.textContent = '群星为伴，以光年丈量孤独';
+  var panel = document.getElementById('planetPanel');
+  panel.style.borderLeftColor = 'rgba(255,255,255,0.5)';
+  planetTaglineEl.style.color = 'rgba(255,255,255,0.4)';
+  bloom.strength = 0.5;
+  bloom.threshold = 0.3;
+  backBtnEl.style.display = 'none';
+  helpText.textContent = '点击轨道 · 进入行星';
+  helpText.style.opacity = '0.45';
+}
+
+function initPlanet(index) {
+  var config = planetConfigs[index];
+  currentGroup = buildPlanetGroup(config);
+  currentGroup.position.y = 0;
+  scene.add(currentGroup);
+  updatePlanetUI(config);
+  applyBloomSettings(config);
+}
+
+function switchPlanet(newIndex, direction) {
+  if (isSwitching) return;
+  if (newIndex < 0) newIndex = planetConfigs.length - 1;
+  if (newIndex >= planetConfigs.length) newIndex = 0;
+  if (newIndex === currentPlanetIndex) return;
+
+  isSwitching = true;
+  switchDirection = direction;
+  switchProgress = 0;
+
+  // Create incoming planet at offset position
+  var newConfig = planetConfigs[newIndex];
+  incomingGroup = buildPlanetGroup(newConfig);
+  incomingGroup.position.y = direction * 5;
+  scene.add(incomingGroup);
+
+  // Update name immediately
+  updatePlanetUI(newConfig);
+  applyBloomSettings(newConfig);
+
+  // Store old group for removal
+  var oldGroup = currentGroup;
+  var oldIndex = currentPlanetIndex;
+
+  // Start animation
+  switchTargetY = -direction * 5;
+  currentPlanetIndex = newIndex;
+
+  // We'll animate in the animate loop
+  // Store reference for cleanup
+  incomingGroup._oldGroup = oldGroup;
+  incomingGroup._oldIndex = oldIndex;
+}
+
+// ════════════════════════════════════════════════════════════
+//  POST-PROCESSING
+// ════════════════════════════════════════════════════════════
+const composer=new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene,camera));
+const bloom=new UnrealBloomPass(
+  new THREE.Vector2(window.innerWidth,window.innerHeight),
+  0.6,0.5,0.25
+);
+composer.addPass(bloom);
+
+const compositeShader={
+  uniforms:{
+    tDiffuse:{value:null},
+    uBloomStrength:{value:0.8}
+  },
+  vertexShader:`varying vec2 vUv;void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
+  fragmentShader:`
+    uniform sampler2D tDiffuse;
+    uniform float uBloomStrength;
+    varying vec2 vUv;
+    void main(){
+      vec4 color=texture2D(tDiffuse,vUv);
+      gl_FragColor=color;
+    }`
+};
+composer.addPass(new ShaderPass(compositeShader));
+
+// ── Resize ──
+window.addEventListener('resize',()=>{
+  const w=window.innerWidth,h=window.innerHeight;
+  camera.aspect=w/h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w,h);
+  composer.setSize(w,h);
+  bloom.resolution.set(w,h);
+});
+
+// ── Smoothed values ──
+let smoothedDiffusion=0;
+let smoothedScale=0.3;
+let handDetected=false;
+let helpVisible=true;
+
+// ── Camera orbit ──
+const CAM_DISTANCES=[25.0, 5.2, 2.5];
+let camState=0;
+let camYaw=0;
+let camPitch=0.6;
+let camDistance=CAM_DISTANCES[0];
+let targetYaw=0;
+let targetPitch=0.6;
+let targetDistance=CAM_DISTANCES[0];
+let targetDiffusion=0;
+let targetScale=1.0;
+
+const diffusionFill=document.getElementById('diffusionFill');
+const statusDot=document.getElementById('statusDot');
+const statusText=document.getElementById('statusText');
+const helpText=document.getElementById('helpText');
+const loadingOverlay=document.getElementById('loadingOverlay');
+const videoInput=document.getElementById('videoInput');
+
+// ── Animation ──
+function updateCamera(dt){
+  const s=Math.min(1,dt*2.5);
+  camYaw+=(targetYaw-camYaw)*s;
+  camDistance+=(targetDistance-camDistance)*Math.min(1,dt*2.0);
+
+  camera.position.x=camDistance*Math.sin(camYaw)*Math.cos(camPitch);
+  camera.position.y=camDistance*Math.sin(camPitch);
+  camera.position.z=camDistance*Math.cos(camYaw)*Math.cos(camPitch);
+  camera.lookAt(0,0,0);
+}
+
+function animate(){
+  requestAnimationFrame(animate);
+  const dt=clock.getDelta();
+  const t=clock.getElapsedTime();
+
+  // Palm gesture cooldown
+  palmSwitchCooldown=Math.max(0,palmSwitchCooldown-dt);
+
+  const s=0.8;
+  uniforms.uDiffusion.value+=(targetDiffusion-uniforms.uDiffusion.value)*Math.min(1,dt*s);
+  uniforms.uScale.value+=(targetScale-uniforms.uScale.value)*Math.min(1,dt*2.0);
+  smoothedDiffusion+=(uniforms.uDiffusion.value-smoothedDiffusion)*Math.min(1,dt*s);
+  smoothedScale+=(targetScale-smoothedScale)*Math.min(1,dt*2.0);
+
+  uniforms.uTime.value=t;
+
+  // Auto-rotate: always in overview, only when no hand in focused
+  if(viewMode==='overview'){
+    targetYaw+=dt*0.03;
+  }else if(!handDetected){
+    targetYaw+=dt*0.08;
+  }
+
+  // Overview: animate planet orbits
+  if(viewMode==='overview' && overviewGroup){
+    overviewGroup.traverse(function(child){
+      if(child.userData && child.userData.isOrbitPivot){
+        child.rotation.y += dt * child.userData.orbitSpeed * 0.06;
+      }
+    });
+  }
+  updateCamera(dt);
+
+  // Planet switching animation
+  if (isSwitching && currentGroup && incomingGroup) {
+    var speed = dt * 4;
+    // Move current group away
+    currentGroup.position.y += (switchTargetY - currentGroup.position.y) * Math.min(1, speed * 2);
+    // Move incoming group to center
+    incomingGroup.position.y += (0 - incomingGroup.position.y) * Math.min(1, speed * 2);
+
+    // Check if animation is complete
+    var distCurrent = Math.abs(currentGroup.position.y - switchTargetY);
+    var distIncoming = Math.abs(incomingGroup.position.y);
+    if (distCurrent < 0.05 && distIncoming < 0.05) {
+      // Animation complete
+      scene.remove(currentGroup);
+      // Dispose old group children
+      currentGroup.traverse(function(child) {
+        if (child.geometry) child.geometry.dispose();
+        if (child.material) child.material.dispose();
+      });
+      currentGroup = incomingGroup;
+      currentGroup.position.y = 0;
+      incomingGroup = null;
+      isSwitching = false;
+    }
+  }
+
+  // Planet self-rotation
+  if (currentGroup && viewMode==='focused') {
+    currentGroup.rotation.y += dt * 0.15;
+  }
+
+  // Moon orbit animation
+  if (currentGroup && currentGroup.userData.moonPivot) {
+    currentGroup.userData.moonPivot.rotation.y += dt * currentGroup.userData.moonSpeed;
+  }
+
+
+  diffusionFill.style.width=(smoothedDiffusion*100)+'%';
+
+  composer.render();
+}
+
+// ── Fullscreen ──
+const fsBtn=document.getElementById('fullscreenBtn');
+function toggleFullscreen(){
+  if(!document.fullscreenElement){
+    document.documentElement.requestFullscreen().catch(()=>{});
+  }else{
+    document.exitFullscreen();
+  }
+}
+fsBtn.addEventListener('click',toggleFullscreen);
+document.addEventListener('keydown',e=>{
+  if(e.key==='f'||e.key==='F')toggleFullscreen();
+  if(e.key===' '){e.preventDefault();videoInput.classList.toggle('visible');}
+  if(e.key==='ArrowUp'&&viewMode==='focused'){e.preventDefault();switchPlanet(currentPlanetIndex-1,-1);}
+  if(e.key==='ArrowDown'&&viewMode==='focused'){e.preventDefault();switchPlanet(currentPlanetIndex+1,1);}
+  if(e.key==='Escape'&&viewMode==='focused'){e.preventDefault();returnToOverview();}
+});
+
+// ── Planet Panel Events ──
+planetUpEl.addEventListener('click', function() {
+  if(viewMode==='focused') switchPlanet(currentPlanetIndex - 1, -1);
+});
+planetDownEl.addEventListener('click', function() {
+  if(viewMode==='focused') switchPlanet(currentPlanetIndex + 1, 1);
+});
+backBtnEl.addEventListener('click', function() {
+  returnToOverview();
+});
+
+// ── Click orbit to focus ──
+var raycaster = new THREE.Raycaster();
+var mouse = new THREE.Vector2();
+renderer.domElement.addEventListener('click', function(e) {
+  if(viewMode !== 'overview' || orbitHitboxes.length === 0) return;
+  mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+  mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+  raycaster.setFromCamera(mouse, camera);
+  var hits = raycaster.intersectObjects(orbitHitboxes);
+  if(hits.length > 0){
+    focusOnPlanet(hits[0].object.userData.planetIndex);
+  }
+});
+
+// ── MediaPipe Hands ──
+function initHandTracking(){
+  const video=document.getElementById('videoInput');
+
+  const hands=new Hands({
+    locateFile:(file)=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+  });
+
+  hands.setOptions({
+    staticImageMode:false,
+    maxNumHands:1,
+    modelComplexity:1,
+    minDetectionConfidence:0.7,
+    minTrackingConfidence:0.6
+  });
+
+  hands.onResults((results)=>{
+    if(results.multiHandLandmarks&&results.multiHandLandmarks.length>0){
+      const lm=results.multiHandLandmarks[0];
+      handDetected=true;
+      wasHandDetected=true;
+
+      // Overview mode: ignore hand completely
+      if(viewMode==='overview'){
+        return;
+      }
+
+      // Focused mode: normal hand tracking
+      const dx=lm[4].x-lm[8].x;
+      const dy=lm[4].y-lm[8].y;
+      const dist=Math.sqrt(dx*dx+dy*dy);
+      const diffusion=Math.max(0,Math.min(1,(dist-0.02)/0.30));
+      targetDiffusion=diffusion;
+
+      const SCALES=[1.0, 2.0];
+      let newState=dist>0.12 ? 1 : 0;
+      if(newState!==camState){
+        camState=newState;
+        targetDistance=CAM_DISTANCES[newState+1];
+        targetScale=SCALES[newState];
+      }
+
+      const palmX=(lm[0].x+lm[5].x+lm[9].x+lm[13].x+lm[17].x)/5;
+      lastPalmY=(lm[0].y+lm[5].y+lm[9].y+lm[13].y+lm[17].y)/5;
+      targetYaw=(0.5-palmX)*Math.PI*2.5;
+
+      statusDot.classList.add('active');
+      statusText.textContent='追踪中';
+
+      if(helpVisible){
+        helpVisible=false;
+        helpText.style.opacity='0';
+      }
+    }else{
+      // Overview mode: hand lost, do nothing
+      if(viewMode==='overview'){
+        handDetected=false;
+        wasHandDetected=false;
+        return;
+      }
+
+      // Focused mode: trigger planet switch if hand exited at top/bottom edge
+      if(wasHandDetected && palmSwitchCooldown<=0){
+        if(lastPalmY<0.15){
+          switchPlanet(currentPlanetIndex-1,-1);
+          palmSwitchCooldown=2.0;
+        }else if(lastPalmY>0.85){
+          switchPlanet(currentPlanetIndex+1,1);
+          palmSwitchCooldown=2.0;
+        }
+      }
+      handDetected=false;
+      wasHandDetected=false;
+      targetDiffusion=0;
+      targetScale=1.0;
+      camState=0;
+      targetDistance=CAM_DISTANCES[1];
+      statusDot.classList.remove('active');
+      statusText.textContent='未检测到手';
+    }
+  });
+
+  const cam=new Camera(video,{
+    onFrame:async()=>{
+      await hands.send({image:video});
+    },
+    width:640,
+    height:480
+  });
+
+  cam.start().then(()=>{
+    statusText.textContent='追踪中';
+  }).catch((err)=>{
+    console.warn('Camera init failed:',err);
+    statusText.textContent='摄像头不可用';
+  });
+}
+
+// ── Init ──
+function initOverview() {
+  overviewGroup = buildOverview();
+  scene.add(overviewGroup);
+  planetNameEl.textContent = '太阳系';
+  planetTaglineEl.textContent = '群星为伴，以光年丈量孤独';
+  var panel = document.getElementById('planetPanel');
+  panel.style.borderLeftColor = 'rgba(255,255,255,0.5)';
+  planetTaglineEl.style.color = 'rgba(255,255,255,0.4)';
+  bloom.strength = 0.5;
+  bloom.threshold = 0.3;
+}
+initOverview();
+loadingOverlay.classList.add('hidden');
+animate();
+
+if(typeof Hands!=='undefined'&&typeof Camera!=='undefined'){
+  initHandTracking();
+}else{
+  console.warn('MediaPipe not loaded yet, will retry...');
+  let retries=0;
+  const retryInterval=setInterval(()=>{
+    retries++;
+    if(typeof Hands!=='undefined'&&typeof Camera!=='undefined'){
+      clearInterval(retryInterval);
+      initHandTracking();
+    }else if(retries>20){
+      clearInterval(retryInterval);
+      console.warn('MediaPipe failed to load');
+      statusText.textContent='手势不可用';
+    }
+  },500);
+}
+</script>
+</body>
+</html>
